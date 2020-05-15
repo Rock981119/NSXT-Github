@@ -1,0 +1,18 @@
+
+apiVersion: "k8s.cni.cncf.io/v1"
+kind: NetworkAttachmentDefinition
+metadata: 
+  name: second-vnic
+  namespace: rock-demo-routing
+spec:
+  config: '{
+    "cniVersion": "0.3.0",
+    "type": "nsx",                                         
+    "networkID": "K8SC1_Second_VNIC",   
+    "ipam": {                                              
+      "subnet": "172.33.0.0/24",
+      "rangeStart": "172.33.0.2",                          
+      "rangeEnd": "172.33.0.254",
+      "gateway": "172.33.0.1"
+    }
+}'
