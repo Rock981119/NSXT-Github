@@ -1,0 +1,169 @@
+===============================================================================
+#1 NCP中Enable Multus Like
+===============================================================================
+#2 全局定义network-attachment-definitions CRD
+apiVersion: apiextensions.k8s.io/v1beta1
+kind: CustomResourceDefinition
+metadata:
+  name: network-attachment-definitions.k8s.cni.cncf.io
+spec:
+  group: k8s.cni.cncf.io
+  version: v1
+  scope: Namespaced
+  names:
+     plural: network-attachment-definitions
+     singular: network-attachment-definition
+     kind: NetworkAttachmentDefinition
+     shortNames:
+     - net-attach-def
+  validation:
+    openAPIV3Schema:
+      properties:
+        spec:
+          properties:
+            config:
+              type: string
+===============================================================================
+#3 为Network Device Plugin配置ConfigMap
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sriovdp-config
+  namespace: kube-system
+data:
+  config.json: |
+    {
+        "resourceList": [{
+                "resourceName": "pass_pool_1",
+                "selectors": {
+                    "pfNames":[
+                      "ens192"
+                    ]
+                }
+            }  
+        ]
+    }
+
+===============================================================================
+#4 部署Network Device Plugin DaemonSet
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sriov-device-plugin
+  namespace: kube-system
+
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: kube-sriov-device-plugin-amd64
+  namespace: kube-system
+  labels:
+    tier: node
+    app: sriovdp
+spec:
+  selector:
+    matchLabels:
+      name: sriov-device-plugin
+  template:
+    metadata:
+      labels:
+        name: sriov-device-plugin
+        tier: node
+        app: sriovdp
+    spec:
+      hostNetwork: true
+      hostPID: true
+      nodeSelector:
+        beta.kubernetes.io/arch: amd64
+      tolerations:
+      - key: node-role.kubernetes.io/master
+        operator: Exists
+        effect: NoSchedule
+      serviceAccountName: sriov-device-plugin
+      containers:
+      - name: kube-sriovdp
+        image: 192.168.31.250:5000/nfvpe/sriov-device-plugin:latest
+        imagePullPolicy: IfNotPresent
+        args:
+        - --log-dir=sriovdp
+        - --log-level=10
+        securityContext:
+          privileged: true
+        volumeMounts:
+        - name: devicesock
+          mountPath: /var/lib/kubelet/
+          readOnly: false
+        - name: log
+          mountPath: /var/log
+        - name: config-volume
+          mountPath: /etc/pcidp
+      volumes:
+        - name: devicesock
+          hostPath:
+            path: /var/lib/kubelet/
+        - name: log
+          hostPath:
+            path: /var/log
+        - name: config-volume
+          configMap:
+            name: sriovdp-config
+            items:
+            - key: config.json
+              path: config.json
+
+===============================================================================
+#5 在NS中定义一个NetworkAttachmentDefinition, 设置网卡从属关系, IPAM
+apiVersion: "k8s.cni.cncf.io/v1"
+kind: NetworkAttachmentDefinition
+metadata:
+  name: passpool1
+  namespace: rock-demo-routing
+  annotations:
+    k8s.v1.cni.cncf.io/resourceName: intel.com/pass_pool_1
+spec:
+  config: '{
+  "type": "nsx",
+  "cniVersion": "0.3.0",
+  "ipam": {
+    "subnet": "192.168.31.0/24",
+    "rangeStart": "192.168.31.100",
+    "rangeEnd": "192.168.31.110",
+    "gateway": "192.168.31.250"
+  }
+}'
+
+===============================================================================
+#6 在Pod中通过注释指定次网卡从属的NetworkAttachmentDefinition
+apiVersion: v1
+kind: Pod
+metadata:
+  name: net-tool-passth-nic
+  namespace: rock-demo-routing
+  annotations:
+    #此处依然要注意格式, 中括号缩进两位
+    k8s.v1.cni.cncf.io/networks: |
+      [
+        {"name": "passpool1"}
+      ]
+spec:
+  containers:
+    - name: net-tool-passth-nic
+      image: 192.168.31.250:5000/nettools:v1
+      imagePullPolicy: IfNotPresent
+      resources:
+        requests:
+          intel.com/pass_pool_1: '1'
+        limits:
+          intel.com/pass_pool_1: '1'
+      command: ['/bin/bash', '-c']
+      args:
+        - echo Container with 2 nic is Running ;
+          route add -net 1.1.1.1 netmask 255.255.255.255 gw 192.168.31.250;
+          echo ip route added.;
+          sleep 3600;
+      securityContext:
+            capabilities:
+              add:
+              - NET_ADMIN

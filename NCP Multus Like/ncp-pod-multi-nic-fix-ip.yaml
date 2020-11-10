@@ -1,0 +1,31 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: net-tool-duo-nic
+  namespace: rock-demo-routing
+  annotations:
+    #k8s.v1.cni.cncf.io/networks类型要写对
+    k8s.v1.cni.cncf.io/networks: |
+      [
+        {
+          "name": "k8c1-vlan-nic",
+          "interface": "eth1",
+          "ips": ["192.168.30.80/24"],
+          "mac": "02:11:22:33:44:55"
+        }
+      ]
+spec:
+  containers:
+    - name: net-tool-duo-nic
+      image: 192.168.31.250:5000/nettools:v1
+      imagePullPolicy: IfNotPresent
+      command: ['/bin/bash', '-c']
+      args:
+        - echo Container with 2 nic is Running ;
+          route add -net 1.1.1.1 netmask 255.255.255.255 gw 192.168.30.250;
+          echo ip route added.;
+          sleep 3600;
+      securityContext:
+            capabilities:
+              add:
+              - NET_ADMIN
